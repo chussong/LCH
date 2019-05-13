@@ -1,8 +1,8 @@
 # Library of Convenient Headers (LCH)
 
 This is a header-only library containing general-purpose utility headers used in
-Joyz projects, mainly PETT and related repositories. Most will work with C++14
-or higher; some may work with C++11 and a few may require C++17. 
+Joyz projects. Most will work with C++14 or higher; some may work with C++11 
+and a few may require C++17. 
 
 Since these are headers, you generally can use them without changing how your 
 program is compiled. However, file.hpp is an exception: it provides a common
