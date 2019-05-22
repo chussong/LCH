@@ -64,6 +64,10 @@ class Generator : public std::iterator<std::input_iterator_tag, T> {
     // When instantiating a generator, define a class which inherits from this
     // and implements operator()(); there are no other particular requirements,
     // and users of the generator do not need to know how the class works.
+    //
+    // operator()() should return a T along with a bool indicating whether the
+    // new value is valid. If the bool is false, the value is never read.
+    // TODO: when C++17 is available, replace this return with std::optional
     class GetNext {
       public:
           virtual std::pair<T, bool> operator()() = 0;
@@ -77,11 +81,12 @@ class Generator : public std::iterator<std::input_iterator_tag, T> {
     using pointer = const T*;
     using difference_type = std::ptrdiff_t;
 
-    Generator(std::unique_ptr<GetNext>&& getNext,
-              T&& initialValue,
+    template<typename U>
+    Generator(std::unique_ptr<GetNext> getNext,
+              U&& initialValue,
               const bool alreadyInvalid = false): 
                     getNext(std::forward<std::unique_ptr<GetNext>>(getNext)), 
-                    value(std::forward<T>(initialValue)), 
+                    value(std::forward<U>(initialValue)), 
                     done(alreadyInvalid)  {}
 
     // returns a generator which starts off invalid and returns nothing
@@ -89,13 +94,18 @@ class Generator : public std::iterator<std::input_iterator_tag, T> {
         return Generator(nullptr, T(), true);
     }
 
-    // because getNext maintains its state internally, it is not copyable,
-    // and therefore an instance of this class is not copyable either
-    Generator(const Generator& toCopy) = delete;
-    Generator(Generator&& toMove) = default;
-    Generator& operator=(const Generator& toCopy) = delete;
-    Generator& operator=(Generator&& toMove) = default;
-    ~Generator() = default;
+    // returns a generator which contains the given value and can't be advanced
+    template<typename U>
+    static Generator SingleValue(U&& value) {
+        class DontGetNext : public Generator<T>::GetNext {
+          public:
+            std::pair<T, bool> operator()() {
+                return std::make_pair(T(), false);
+            }
+        };
+
+        return Generator(std::make_unique<DontGetNext>(), std::forward<U>(value));
+    }
 
     explicit operator bool() const { return !done; }
     const T& operator*() const { 
