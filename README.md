@@ -14,7 +14,8 @@ require a `-lstdc++fs` on GCC (Linux) or a `-lc++fs` on clang (MacOS).
 
 Some unit tests are available. You can build them by running `make` in the 
 `tests` directory, and subsequently run them with `./lch_test`. The tests are
-made using Catch2, so commands for that should work normally.
+made using Catch2, so commands for that should work normally; run 
+`./lch_test --help` for a list.
 
 Written and maintained by [Charles Hussong](mailto:c.hussong@joyz.co.jp) 
 for [Joyz Inc.](https://www.joyz.co.jp/) in Tokyo, Japan.
