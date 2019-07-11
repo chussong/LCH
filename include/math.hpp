@@ -70,7 +70,7 @@ void StandardizeFromZeroMean(Iterator begin, Iterator end) {
     std::transform(begin, end, begin, [sd](const T& val){ return val/sd; });
 }
 
-// standard zero-mean data in a container with a begin() and an end()
+// standardize zero-mean data in a container with a begin() and an end()
 template<typename Container>
 void StandardizeFromZeroMean(Container& container) {
     StandardizeFromZeroMean(container.begin(), container.end());
