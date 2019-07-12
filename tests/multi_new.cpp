@@ -48,11 +48,27 @@ class ThrowAfterThree {
 int ThrowAfterThree::count = 0;
 
 TEST_CASE("multi_new works and is properly exception safe", "[multi_new]") {
-    ThrowAfterThree* a;
-    ThrowAfterThree* b;
-    ThrowAfterThree* c;
-    ThrowAfterThree* d;
-    REQUIRE_THROWS_AS(LCH::MultiNew(a, b, c, d), std::exception);
-    // if the count is 0 after this, they have been correctly destroyed
-    REQUIRE(ThrowAfterThree::Count() == 0);
+    ThrowAfterThree* a = nullptr;
+    ThrowAfterThree* b = nullptr;
+    ThrowAfterThree* c = nullptr;
+    ThrowAfterThree* d = nullptr;
+
+    SECTION("works when nothing throws") {
+        REQUIRE(ThrowAfterThree::Count() == 0);
+        LCH::MultiNew(a, b, c);
+        REQUIRE(ThrowAfterThree::Count() == 3);
+        REQUIRE(a != nullptr);
+        REQUIRE(b != nullptr);
+        REQUIRE(c != nullptr);
+        delete a;
+        delete b;
+        delete c;
+    }
+
+    SECTION("nothing is leaked when an exception happens") {
+        REQUIRE(ThrowAfterThree::Count() == 0);
+        REQUIRE_THROWS(LCH::MultiNew(a, b, c, d));
+        // if the count is 0 after this, they have been correctly destroyed
+        REQUIRE(ThrowAfterThree::Count() == 0);
+    }
 }
