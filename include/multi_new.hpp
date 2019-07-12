@@ -3,6 +3,9 @@
 // will be deleted using the correct deletion operators, then the offending
 // exception will be re-thrown.
 //
+// MultiNew has a "strong exception guarantee", meaning that in the event of an
+// exception none of the arguments are changed (and no memory is leaked).
+//
 // Note that this does not perform any memory management. You should generally
 // use std::unique_ptr<T> or std::shared_ptr<T> instead whenever possible, but
 // sometimes (e.g. when making APIs for other languages) this automatic 
@@ -83,11 +86,12 @@ void MultiNew(T& allocateNow, std::size_t count, Args&... allocateLater);
 template<typename T, typename... Args, typename = EnableIfPointer<T>>
 void MultiNew(T& allocateNow, Args&... allocateLater) {
     using Underlying = typename std::remove_pointer<T>::type;
-    allocateNow = new Underlying;
+    Underlying* temp = new Underlying;
     try {
         MultiNew(allocateLater...);
+        allocateNow = temp;
     } catch (...) {
-        delete allocateNow;
+        delete temp;
         throw;
     }
 }
@@ -95,11 +99,12 @@ void MultiNew(T& allocateNow, Args&... allocateLater) {
 template<typename T, typename... Args, typename = EnableIfPointer<T>>
 void MultiNew(T& allocateNow, std::size_t count, Args&... allocateLater) {
     using Underlying = typename std::remove_pointer<T>::type;
-    allocateNow = new Underlying[count];
+    Underlying* temp = new Underlying[count];
     try {
         MultiNew(allocateLater...);
+        allocateNow = temp;
     } catch (...) {
-        delete[] allocateNow;
+        delete[] temp;
         throw;
     }
 }

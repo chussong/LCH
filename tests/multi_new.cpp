@@ -70,5 +70,9 @@ TEST_CASE("multi_new works and is properly exception safe", "[multi_new]") {
         REQUIRE_THROWS(LCH::MultiNew(a, b, c, d));
         // if the count is 0 after this, they have been correctly destroyed
         REQUIRE(ThrowAfterThree::Count() == 0);
+        REQUIRE(a == nullptr);
+        REQUIRE(b == nullptr);
+        REQUIRE(c == nullptr);
+        REQUIRE(d == nullptr);
     }
 }
