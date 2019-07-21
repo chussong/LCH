@@ -111,8 +111,15 @@ class ThreadPool {
     //
     // Blocks until all threads and tasks are destroyed.
     void WaitUntilFinished() {
+        std::lock_guard<std::mutex> threadLock(threadMutex);
+        if (threads.empty()) return;
+
         finished = true;
-        WakeAndJoinThreads();
+        notifier.notify_all();
+        for (auto& thread : threads) thread.join();
+        threads.clear();
+
+        ClearFutureTasks();
     }
 
     // Immediately marks the pool as finished, as above, but also marks it
@@ -124,14 +131,17 @@ class ThreadPool {
     // crashing your entire program; if you want more immediate termination than
     // this, you'll need to arrange for the thread itself to return or throw.
     //
-    // Blocks until future tasks can be replaced, but does not block for 
+    // Blocks until future tasks can be destroyed, but does not block for 
     // threads to finish executing their current tasks.
     void StopASAP() {
-        if (noMoreTasks) return;
+        std::lock_guard<std::mutex> threadLock(threadMutex);
+        if (noMoreTasks || threads.empty()) return;
+
         finished = true;
         noMoreTasks = true;
-        ClearFutureTasks();
         notifier.notify_all();
+
+        ClearFutureTasks();
     }
 
     // Restart a thread pool that has been shut down (throw a logic error if
@@ -248,20 +258,6 @@ class ThreadPool {
         // below code means "tasks = {};" which doesn't compile on clang
         decltype(tasks) emptyTasks;
         std::swap(emptyTasks, tasks);
-    }
-
-    // Add some empty tasks to wake up the threads; join them when finished,
-    // then make sure the task queue is also empty (since stuff in there might
-    // store internal state that needs to be deleted).
-    void WakeAndJoinThreads() {
-        std::lock_guard<std::mutex> threadLock(threadMutex);
-        if (threads.empty()) return;
-
-        notifier.notify_all();
-        for (auto& thread : threads) thread.join();
-        threads.clear();
-
-        ClearFutureTasks();
     }
 };
 
