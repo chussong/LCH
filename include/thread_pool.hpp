@@ -1,16 +1,44 @@
 ///////////////////////////////////////////////////////////////////////////////
-// thread.hpp: contains a generic thread pool class that allows allocation of 
-// pools and assignment of tasks to the contained threads.
+// thread_pool.hpp: contains a generic thread pool class that allows allocation 
+// of pools and assignment of tasks to the contained threads.
+//
+// Simply create a thread pool, then add jobs to it with AddTask; adding a task 
+// returns a std::future from which you can retrieve the result using 
+// std::future::get(). Each task must be invocable in the same way as a 
+// 0-argument function (usually it's easiest to do this with a lambda).
+//
+// LCH::ThreadPool threadPool;
+// int a = 7;
+// int b = 91;
+// std::future<int> futureResult = threadPool.AddTask([a,b](){ return a + b; });
+// int result = futureResult.get();
+//
+// Because jobs are run using std::packaged_task, exceptions thrown by the jobs
+// will be packed into the associated std::future and then re-thrown when the 
+// std::future is unpacked with get(). Therefore, if a task can throw, you may
+// want to get() it inside a try block to catch exceptions from the task.
 //
 // This uses a templated-struct-based method for storing tasks rather than
 // std::function because std::function is required to be copyable; ThreadPool
 // should have no trouble with tasks that contain move-only internal state.
 //
-// The default error handler will simply rethrow any exceptions, which will
-// probably call terminate(). You can set a different exception handler by
-// calling SetExceptionHandler, but this is actually rarely used -- exceptions
-// thrown by the Tasks themselves will simply be placed into the std::future
-// returned by AddTask.
+// !!WARNING!! !!WARNING!! !!WARNING!!
+// Because this class contains a bunch of threads, it can't be destroyed until
+// they've been joined. This means that the destructor blocks until the threads'
+// jobs have finished, and therefore exiting any scope containing a threadPool 
+// may block for potentially infinite time. To avoid this, you can call 
+// WaitUntilFinished() manually, after which point the destructor will not
+// block.
+//
+// There are only two major sources of exceptions in this class, but they are
+// important: first, adding a task may throw due to allocation failures. Second
+// and potentially more seriously, any function using a mutex may throw due to
+// the OS failing to acquire the necessary lock. Crucially, this means that
+// WaitUntilFinished() and therefore also the destructor may throw (terminating
+// the entire program in the latter case). If you think you can handle this
+// better, call WaitUntilFinished() manually inside a try block and make sure
+// the ThreadPool is guaranteed to be shut down before it is destroyed.
+// !!WARNING!! !!WARNING!! !!WARNING!!
 ///////////////////////////////////////////////////////////////////////////////
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -40,7 +68,6 @@
 #include <queue>
 #include <memory>
 #include <stdexcept>
-#include <type_traits> // std::is_invocable
 #include <future>
 
 namespace LCH {
@@ -48,14 +75,12 @@ namespace LCH {
 class ThreadPool {
   private:
     class AbstractTask;
-    class ExceptionHandler;
 
   public:
     // A default-constructed thread pool contains hardware_concurrency() threads
     explicit ThreadPool(std::size_t threadCount 
                         = std::thread::hardware_concurrency()):
-            exceptionHandler(std::make_unique<ExceptionHandler>()), 
-            finished(false), terminate(false), waiting(0) {
+            finished(false), noMoreTasks(false), waiting(0) {
         for (std::size_t i = 0; i < threadCount; ++i) {
             threads.emplace_back(&ThreadPool::WaitForTask, this);
         }
@@ -63,8 +88,7 @@ class ThreadPool {
 
     // ThreadPools are neither movable nor copyable because they contain a 
     // mutex; they wait for all tasks to be completed before they're destroyed. 
-    // If you want to end the threads faster than this, manually call 
-    // TerminateAfterCurrentTasks.
+    // If you want to end the threads faster than this, manually call StopASAP.
     virtual ~ThreadPool() { WaitUntilFinished(); }
     
     // Adds a task to the queue and wakes up a thread to work on it. newTask can
@@ -81,98 +105,97 @@ class ThreadPool {
         return futureResult;
     }
 
-    template<class Callable>
-    void SetExceptionHandler(Callable&& handler) {
-        std::lock_guard<std::mutex> lock(exceptionMutex);
-        exceptionHandler = std::make_unique<CustomExceptionHandler<Callable>>(
-                std::forward<Callable>(handler));
-    }
-
     // Immediately marks the pool as finished, causing a logic_error to be 
     // thrown if you attempt to add any new tasks. Then adds a bunch of empty
     // tasks to wake up the threads and waits for them to finish.
     //
-    // Blocks until all threads are destroyed.
-    // FIXME: does not necessarily block if another thread called this first!
+    // Blocks until all threads and tasks are destroyed.
     void WaitUntilFinished() {
-        if (finished) return;
         finished = true;
         WakeAndJoinThreads();
     }
 
     // Immediately marks the pool as finished, as above, but also marks it
-    // terminate, so that when a thread finishes a task it will not get another.
+    // noMoreTasks, so that when a thread finishes a task it will not get 
+    // another. Aborts all existing tasks after the ones currently being 
+    // executed; their std::futures will throw std::future_error.
     //
     // This is the closest you can come to forcing a thread to terminate without
     // crashing your entire program; if you want more immediate termination than
     // this, you'll need to arrange for the thread itself to return or throw.
     //
-    // Blocks until all threads are destroyed.
-    // FIXME: does not necessarily block if another thread called this first!
-    void TerminateAfterCurrentTasks() {
-        if (terminate) return;
+    // Blocks until future tasks can be replaced, but does not block for 
+    // threads to finish executing their current tasks.
+    void StopASAP() {
+        if (noMoreTasks) return;
         finished = true;
-        terminate = true;
-        WakeAndJoinThreads();
+        noMoreTasks = true;
+        ClearFutureTasks();
+        notifier.notify_all();
     }
 
     // Restart a thread pool that has been shut down (throw a logic error if
     // it's still running).
     void Restart(std::size_t threadCount) {
+        std::lock_guard<std::mutex> threadLock(threadMutex);
         if (threads.size() != 0) {
             throw std::logic_error("LCH::ThreadPool::Restart: pool has not been"
                                    "shut down so it can not be restarted");
         }
 
-        terminate = false;
+        noMoreTasks = false;
         finished = false;
         for (std::size_t i = 0; i < threadCount; ++i) {
             threads.emplace_back(&ThreadPool::WaitForTask, this);
         }
     }
 
-    std::size_t ThreadCount() const { return threads.size(); }
-    std::size_t IdleThreadCount() const { return waiting; }
-    std::size_t RunningThreadCount() const { return threads.size() - IdleThreadCount(); }
-    bool Idle() const { return IdleThreadCount() == threads.size(); }
-    bool Running() const { return !Idle(); }
+    std::size_t ThreadCount() const noexcept { 
+        return threads.size(); 
+    }
+    std::size_t IdleThreadCount() const noexcept { 
+        return waiting; 
+    }
+    std::size_t RunningThreadCount() const noexcept { 
+        return ThreadCount() - IdleThreadCount(); 
+    }
+    bool Idle() const noexcept { 
+        return ThreadCount() == IdleThreadCount(); 
+    }
+    bool Running() const noexcept { 
+        return !Idle(); 
+    }
 
   protected:
-    std::unique_ptr<ExceptionHandler> exceptionHandler;
-    std::mutex exceptionMutex;
-
-    std::queue<std::unique_ptr<AbstractTask>> tasks;
     std::mutex taskMutex;
     std::condition_variable notifier;
+    std::queue<std::unique_ptr<AbstractTask>> tasks;
 
     std::atomic<bool> finished;
-    std::atomic<bool> terminate;
+    std::atomic<bool> noMoreTasks;
     std::atomic<std::size_t> waiting;
 
+    std::mutex threadMutex;
     std::vector<std::thread> threads;
 
-    // Each thread loops through this function until encountering an empty task
-    // or until the pool is marked terminate, whichever comes first.
+    // Each thread loops through this function until either the pool is marked
+    // noMoreTasks or the task queue is exhausted with the pool marked finished.
     void WaitForTask() {
         std::unique_ptr<AbstractTask> myTask;
-        while (!terminate) {
+        while (true) {
             {
-                std::unique_lock<std::mutex> lock(taskMutex);
+                std::unique_lock<std::mutex> taskLock(taskMutex);
                 if (tasks.empty()) {
+                    if (finished) break;
                     ++waiting;
-                    notifier.wait(lock, [this]{return !tasks.empty();});
+                    notifier.wait(taskLock, [this]{return ThreadShouldWake();});
                     --waiting;
                 }
+                if (noMoreTasks || tasks.empty()) break;
                 myTask = std::move(tasks.front());
                 tasks.pop();
             }
-            if (myTask->IsEmpty()) break;
-            try {
-                (*myTask)();
-            } catch (...) {
-                std::lock_guard<std::mutex> lock(exceptionMutex);
-                (*exceptionHandler)();
-            }
+            (*myTask)();
         }
     }
 
@@ -183,15 +206,6 @@ class ThreadPool {
       public:
         virtual ~AbstractTask() = default;
         virtual void operator()() = 0;
-
-        virtual bool IsEmpty() const { return false; }
-    };
-
-    class EmptyTask : public AbstractTask {
-      public:
-        void operator()() {}
-
-        bool IsEmpty() const { return true; }
     };
 
     template<class Callable>
@@ -203,55 +217,51 @@ class ThreadPool {
         Callable func;
     };
 
-    class ExceptionHandler {
-      public:
-        virtual ~ExceptionHandler() = default;
-        virtual void operator()() { throw; }
-    };
-
-    template<class Callable>
-    class CustomExceptionHandler : public ExceptionHandler {
-      public:
-        explicit CustomExceptionHandler(Callable&& func): 
-            func(std::forward<Callable>(func)) {}
-        void operator()() { func(); }
-
-      private:
-        Callable func;
-    };
-
     // private functions ------------------------------------------------------
+
+    // A sleeping thread should wake up if it has a task to do or if it should
+    // be cleaned up.
+    bool ThreadShouldWake() const noexcept {
+        return !tasks.empty() || finished || noMoreTasks;
+    }
 
     // Move an already-constructed task pointer into the queue.
     void AddTaskDirectly(std::unique_ptr<AbstractTask> newTask) {
-        if (finished && !newTask->IsEmpty()) {
+        if (finished) {
             throw std::logic_error("LCH::ThreadPool::AddTaskDirectly: attempted"
                                    " to add a task to a ThreadPool which has "
                                    "been marked as finished");
         }
 
         {
-            std::lock_guard<std::mutex> lock(taskMutex);
+            std::lock_guard<std::mutex> taskLock(taskMutex);
             tasks.push(std::move(newTask));
         }
         notifier.notify_one();
     }
 
-    void AddEmptyTask() {
-        AddTaskDirectly(std::make_unique<EmptyTask>());
-    }
-
-    // Add some empty tasks to wake up the threads; join them when finished,
-    // then make sure the task queue is also empty (since there might still be
-    // stuff in there storing internal state).
-    void WakeAndJoinThreads() {
-        for (std::size_t i = 0; i < threads.size(); ++i) AddEmptyTask();
-        for (auto& thread : threads) thread.join();
-        threads.clear();
-
+    // Clear all future tasks not currently being worked on by threads. After
+    // clearing, their associated std::futures will throw std::future_error
+    // when opened.
+    void ClearFutureTasks() {
+        std::lock_guard<std::mutex> taskLock(taskMutex);
         // below code means "tasks = {};" which doesn't compile on clang
         decltype(tasks) emptyTasks;
         std::swap(emptyTasks, tasks);
+    }
+
+    // Add some empty tasks to wake up the threads; join them when finished,
+    // then make sure the task queue is also empty (since stuff in there might
+    // store internal state that needs to be deleted).
+    void WakeAndJoinThreads() {
+        std::lock_guard<std::mutex> threadLock(threadMutex);
+        if (threads.empty()) return;
+
+        notifier.notify_all();
+        for (auto& thread : threads) thread.join();
+        threads.clear();
+
+        ClearFutureTasks();
     }
 };
 
