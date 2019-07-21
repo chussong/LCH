@@ -21,6 +21,8 @@
 #include <vector>
 #include <condition_variable>
 #include <atomic>
+#include <thread> // std::this_thread::sleep_for
+#include <chrono> // std::this_thread::sleep_for
 
 int Add(const std::vector<int>& args) {
     int total = 0;
@@ -32,9 +34,12 @@ int Add(const std::vector<int>& args) {
 }
 
 int AddLater(const std::vector<int>& args, const std::atomic<bool>& go,
-             std::mutex& mutex, std::condition_variable& cv) {
+             std::mutex& mutex, std::condition_variable& cv,
+             std::atomic<std::size_t>& waiting) {
     std::unique_lock<std::mutex> lock(mutex);
+    ++waiting;
     cv.wait(lock, [&](){ return go.load(); });
+    --waiting;
     return Add(args);
 }
 
@@ -112,6 +117,7 @@ TEST_CASE("thread_pool can be interrupted", "[thread_pool_stop]") {
     std::mutex mutex;
     std::condition_variable cv;
     std::atomic<bool> go{false};
+    std::atomic<std::size_t> waiting{0};
 
     LCH::ThreadPool threadPool(3);
 
@@ -120,10 +126,16 @@ TEST_CASE("thread_pool can be interrupted", "[thread_pool_stop]") {
 
     for (std::size_t i = 0; i < testCases.size(); ++i) {
         const auto& tc = testCases[i];
-        auto task = [&](){ return AddLater(tc, go, mutex, cv); };
+        auto task = [&](){ return AddLater(tc, go, mutex, cv, waiting); };
         results.push_back(threadPool.AddTask(std::move(task)));
     }
 
+    std::size_t timesWaited = 0;
+    while (waiting < threadPool.ThreadCount() && timesWaited < 100) {
+        using namespace std::chrono_literals;
+        std::this_thread::sleep_for(10ms);
+        ++timesWaited;
+    }
     threadPool.StopASAP();
     go = true;
     cv.notify_all();
