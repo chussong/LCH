@@ -60,7 +60,8 @@
 #ifndef LCH_MULTI_NEW_HPP
 #define LCH_MULTI_NEW_HPP
 
-#include <type_traits>
+#include <type_traits> // std::enable_if, std::is_pointer
+#include <utility> // std::forward
 
 namespace LCH {
 
@@ -81,14 +82,14 @@ void MultiNew(T& allocateNow, std::size_t count) {
 
 // Have to forward declare this so the next function can see it when recursing.
 template<typename T, typename... Args, typename = EnableIfPointer<T>>
-void MultiNew(T& allocateNow, std::size_t count, Args&... allocateLater);
+void MultiNew(T& allocateNow, std::size_t count, Args&&... allocateLater);
 
 template<typename T, typename... Args, typename = EnableIfPointer<T>>
-void MultiNew(T& allocateNow, Args&... allocateLater) {
+void MultiNew(T& allocateNow, Args&&... allocateLater) {
     using Underlying = typename std::remove_pointer<T>::type;
     Underlying* temp = new Underlying;
     try {
-        MultiNew(allocateLater...);
+        MultiNew(std::forward<Args>(allocateLater)...);
         allocateNow = temp;
     } catch (...) {
         delete temp;
@@ -97,11 +98,11 @@ void MultiNew(T& allocateNow, Args&... allocateLater) {
 }
 
 template<typename T, typename... Args, typename = EnableIfPointer<T>>
-void MultiNew(T& allocateNow, std::size_t count, Args&... allocateLater) {
+void MultiNew(T& allocateNow, std::size_t count, Args&&... allocateLater) {
     using Underlying = typename std::remove_pointer<T>::type;
     Underlying* temp = new Underlying[count];
     try {
-        MultiNew(allocateLater...);
+        MultiNew(std::forward<Args>(allocateLater)...);
         allocateNow = temp;
     } catch (...) {
         delete[] temp;
