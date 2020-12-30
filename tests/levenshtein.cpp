@@ -26,6 +26,7 @@ static_assert(!LCH::is_iterable<int>::value, "int should not be iterable");
 TEST_CASE("Levenshtein distance works", "[levenshtein]") {
     LCH::LevenshteinCosts costs {1, 5, 10};
 
+    int intArray[4] = {2, 4, 6, 8};
     std::vector<int> intEmpty{};
     std::vector<int> intFour{1, 1, 2, 3};
     std::vector<int> intSix{1, 1, 2, 3, 5, 8};
@@ -55,6 +56,8 @@ TEST_CASE("Levenshtein distance works", "[levenshtein]") {
     CHECK(LCH::levenshtein_distance(intSix, intSkip, costs) == 20);
     CHECK(LCH::levenshtein_distance(intSkip, intFour, costs) == 4);
     CHECK(LCH::levenshtein_distance(intFour, intSkip, costs) == 4);
+    CHECK(LCH::levenshtein_distance(intArray, intSkip, costs) == 2);
+    CHECK(LCH::levenshtein_distance(dblSkip, intArray, costs) == 2);
 
     CHECK(LCH::levenshtein_distance(dblEmpty, dblEmpty, costs) == 0);
     CHECK(LCH::levenshtein_distance(
