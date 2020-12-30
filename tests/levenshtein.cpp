@@ -18,6 +18,11 @@
 
 #include "Catch2/catch.hpp"
 
+static_assert(LCH::is_iterable<std::vector<int>>::value, "vector should be iterable");
+static_assert(LCH::is_iterable<const char*>::value, "const char* should be iterable");
+static_assert(!LCH::is_iterable<const int*>::value, "const int* should not be iterable");
+static_assert(!LCH::is_iterable<int>::value, "int should not be iterable");
+
 TEST_CASE("Levenshtein distance works", "[levenshtein]") {
     LCH::LevenshteinCosts costs {1, 5, 10};
 

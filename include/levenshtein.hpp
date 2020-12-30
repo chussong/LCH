@@ -88,11 +88,6 @@ namespace Detail {
 template<typename T>
 using is_iterable = decltype(Detail::is_iterable_impl<T>(0));
 
-static_assert(is_iterable<std::vector<int>>::value, "vector should be iterable");
-static_assert(is_iterable<const char*>::value, "const char* should be iterable");
-static_assert(!is_iterable<const int*>::value, "const int* should not be iterable");
-static_assert(!is_iterable<int>::value, "int should not be iterable");
-
 
 template<class InputItA, class InputItB>
 std::size_t levenshtein_distance(
