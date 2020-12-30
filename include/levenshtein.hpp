@@ -99,7 +99,7 @@ std::size_t levenshtein_distance(
     if (sizeB == 0) return sizeA*costs.del;
 
     std::vector<std::size_t> row(sizeB + 1);
-    for (std::size_t j = 0; j < sizeB; ++j) row[j] = j*costs.ins;
+    for (std::size_t j = 0; j < row.size(); ++j) row[j] = j*costs.ins;
 
     for (InputItA aIt = aBegin; aIt != aEnd; ++aIt) {
         std::size_t aboveLeft = row[0];

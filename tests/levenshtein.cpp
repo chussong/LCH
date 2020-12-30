@@ -94,6 +94,7 @@ TEST_CASE("Levenshtein distance works", "[levenshtein]") {
     CHECK(LCH::levenshtein_distance("spur"s, (const char*)"spin", costs) == 2);
     CHECK(LCH::levenshtein_distance((const char*)"123", "") == 3);
     CHECK(LCH::levenshtein_distance("123", ""sv, costs) == 30);
+    CHECK(LCH::levenshtein_distance("3", "3210") == 3);
     CHECK(LCH::levenshtein_distance("", "") == 0);
     CHECK(LCH::levenshtein_distance("", "", costs) == 0);
 }
